@@ -9,7 +9,7 @@ package channelpubsub
 import (
 	"sync"
 
-	exports "github.com/test-network-function/ptp-listerner-exports"
+	exports "github.com/test-network-function/ptp-listener-exports"
 )
 
 type Pubsub struct {

@@ -1,4 +1,4 @@
-module github.com/test-network-function/ptp-listerner-lib
+module github.com/test-network-function/ptp-listener-lib
 
 go 1.19
 
@@ -86,11 +86,11 @@ require (
 require (
 	github.com/anthhub/forwarder v1.1.0
 	github.com/onsi/ginkgo/v2 v2.6.1 // indirect
-	github.com/test-network-function/ptp-listerner-exports v0.0.0-00010101000000-000000000000
+	github.com/test-network-function/ptp-listener-exports v0.0.0-00010101000000-000000000000
 	golang.org/x/sys v0.3.0 // indirect
 )
 
-replace github.com/test-network-function/ptp-listerner-exports => ../ptp-listener-exports
+replace github.com/test-network-function/ptp-listener-exports => ../ptp-listener-exports
 
 replace github.com/test-network-function/channel-pubsub => ../channel-pubsub
 

@@ -1,4 +1,4 @@
-package listernerlib
+package listenerlib
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 	"github.com/redhat-cne/sdk-go/pkg/event"
 	ptpEvent "github.com/redhat-cne/sdk-go/pkg/event/ptp"
 	"github.com/sirupsen/logrus"
-	exports "github.com/test-network-function/ptp-listerner-exports"
+	exports "github.com/test-network-function/ptp-listener-exports"
 
 	"github.com/google/uuid"
 	httpevents "github.com/redhat-cne/sdk-go/pkg/protocol/http"
