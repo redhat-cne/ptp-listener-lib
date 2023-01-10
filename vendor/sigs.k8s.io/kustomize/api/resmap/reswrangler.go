@@ -6,14 +6,11 @@ package resmap
 import (
 	"bytes"
 	"fmt"
-	"reflect"
 
 	"github.com/pkg/errors"
-	"sigs.k8s.io/kustomize/api/filters/annotations"
+	"sigs.k8s.io/kustomize/api/resid"
 	"sigs.k8s.io/kustomize/api/resource"
 	"sigs.k8s.io/kustomize/api/types"
-	"sigs.k8s.io/kustomize/kyaml/kio"
-	"sigs.k8s.io/kustomize/kyaml/resid"
 	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
 )
 
@@ -44,7 +41,7 @@ func (m *resWrangler) Clear() {
 func (m *resWrangler) DropEmpties() {
 	var rList []*resource.Resource
 	for _, r := range m.rList {
-		if !r.IsNilOrEmpty() {
+		if !r.IsEmpty() {
 			rList = append(rList, r)
 		}
 	}
@@ -215,7 +212,7 @@ func (m *resWrangler) GetById(
 	if err != nil {
 		return nil, fmt.Errorf(
 			"%s; failed to find unique target for patch %s",
-			err.Error(), id.String())
+			err.Error(), id.GvknString())
 	}
 	return r, nil
 }
@@ -231,18 +228,18 @@ func demandOneMatch(
 	if len(r) > 1 {
 		return nil, fmt.Errorf("multiple matches for %s %s", s, id)
 	}
-	return nil, fmt.Errorf("no matches for %s %s", s, id)
+	return nil, fmt.Errorf("no matches for %sId %s", s, id)
 }
 
-// GroupedByCurrentNamespace implements ResMap.
+// GroupedByCurrentNamespace implements ResMap.GroupByCurrentNamespace
 func (m *resWrangler) GroupedByCurrentNamespace() map[string][]*resource.Resource {
 	items := m.groupedByCurrentNamespace()
 	delete(items, resid.TotallyNotANamespace)
 	return items
 }
 
-// ClusterScoped implements ResMap.
-func (m *resWrangler) ClusterScoped() []*resource.Resource {
+// NonNamespaceable implements ResMap.NonNamespaceable
+func (m *resWrangler) NonNamespaceable() []*resource.Resource {
 	return m.groupedByCurrentNamespace()[resid.TotallyNotANamespace]
 }
 
@@ -258,7 +255,7 @@ func (m *resWrangler) groupedByCurrentNamespace() map[string][]*resource.Resourc
 	return byNamespace
 }
 
-// GroupedByOriginalNamespace implements ResMap.
+// GroupedByNamespace implements ResMap.GroupByOrginalNamespace
 func (m *resWrangler) GroupedByOriginalNamespace() map[string][]*resource.Resource {
 	items := m.groupedByOriginalNamespace()
 	delete(items, resid.TotallyNotANamespace)
@@ -326,7 +323,7 @@ func (m *resWrangler) ErrorIfNotEqualSets(other ResMap) error {
 				"id in self matches %d in other; id: %s", len(others), id)
 		}
 		r2 := others[0]
-		if !reflect.DeepEqual(r1.RNode, r2.RNode) {
+		if !r1.NodeEqual(r2) {
 			return fmt.Errorf(
 				"nodes unequal: \n -- %s,\n -- %s\n\n--\n%#v\n------\n%#v\n",
 				r1, r2, r1, r2)
@@ -339,7 +336,7 @@ func (m *resWrangler) ErrorIfNotEqualSets(other ResMap) error {
 	return nil
 }
 
-// ErrorIfNotEqualLists implements ResMap.
+// ErrorIfNotEqualList implements ResMap.
 func (m *resWrangler) ErrorIfNotEqualLists(other ResMap) error {
 	m2, ok := other.(*resWrangler)
 	if !ok {
@@ -389,20 +386,17 @@ func (m *resWrangler) makeCopy(copier resCopier) ResMap {
 
 // SubsetThatCouldBeReferencedByResource implements ResMap.
 func (m *resWrangler) SubsetThatCouldBeReferencedByResource(
-	referrer *resource.Resource) (ResMap, error) {
+	referrer *resource.Resource) ResMap {
 	referrerId := referrer.CurId()
-	if referrerId.IsClusterScoped() {
+	if !referrerId.IsNamespaceableKind() {
 		// A cluster scoped resource can refer to anything.
-		return m, nil
+		return m
 	}
 	result := newOne()
-	roleBindingNamespaces, err := getNamespacesForRoleBinding(referrer)
-	if err != nil {
-		return nil, err
-	}
+	roleBindingNamespaces := getNamespacesForRoleBinding(referrer)
 	for _, possibleTarget := range m.rList {
 		id := possibleTarget.CurId()
-		if id.IsClusterScoped() {
+		if !id.IsNamespaceableKind() {
 			// A cluster-scoped resource can be referred to by anything.
 			result.append(possibleTarget)
 			continue
@@ -415,39 +409,36 @@ func (m *resWrangler) SubsetThatCouldBeReferencedByResource(
 		// The two objects are namespaced (not cluster-scoped), AND
 		// are in different namespaces.
 		// There's still a chance they can refer to each other.
-		if roleBindingNamespaces[possibleTarget.GetNamespace()] {
+		ns := possibleTarget.GetNamespace()
+		if roleBindingNamespaces[ns] {
 			result.append(possibleTarget)
 		}
 	}
-	return result, nil
+	return result
 }
 
 // getNamespacesForRoleBinding returns referenced ServiceAccount namespaces
 // if the resource is a RoleBinding
-func getNamespacesForRoleBinding(r *resource.Resource) (map[string]bool, error) {
+func getNamespacesForRoleBinding(r *resource.Resource) map[string]bool {
 	result := make(map[string]bool)
 	if r.GetKind() != "RoleBinding" {
-		return result, nil
+		return result
 	}
 	subjects, err := r.GetSlice("subjects")
 	if err != nil || subjects == nil {
-		return result, nil
+		return result
 	}
 	for _, s := range subjects {
 		subject := s.(map[string]interface{})
 		if ns, ok1 := subject["namespace"]; ok1 {
 			if kind, ok2 := subject["kind"]; ok2 {
 				if kind.(string) == "ServiceAccount" {
-					if n, ok3 := ns.(string); ok3 {
-						result[n] = true
-					} else {
-						return nil, errors.Errorf("Invalid Input: namespace is blank for resource %q\n", r.CurId())
-					}
+					result[ns.(string)] = true
 				}
 			}
 		}
 	}
-	return result, nil
+	return result
 }
 
 // AppendAll implements ResMap.
@@ -490,69 +481,6 @@ func (m *resWrangler) AbsorbAll(other ResMap) error {
 	return nil
 }
 
-// AddOriginAnnotation implements ResMap.
-func (m *resWrangler) AddOriginAnnotation(origin *resource.Origin) error {
-	if origin == nil {
-		return nil
-	}
-	for _, res := range m.rList {
-		or, err := res.GetOrigin()
-		if or != nil || err != nil {
-			// if any resources already have an origin annotation,
-			// skip it
-			continue
-		}
-		if err := res.SetOrigin(origin); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// RemoveOriginAnnotation implements ResMap
-func (m *resWrangler) RemoveOriginAnnotations() error {
-	for _, res := range m.rList {
-		if err := res.SetOrigin(nil); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// AddTransformerAnnotation implements ResMap
-func (m *resWrangler) AddTransformerAnnotation(origin *resource.Origin) error {
-	for _, res := range m.rList {
-		or, err := res.GetOrigin()
-		if err != nil {
-			return err
-		}
-		if or == nil {
-			// the resource does not have an origin annotation, so
-			// we assume that the transformer generated the resource
-			// rather than modifying it
-			err = res.SetOrigin(origin)
-		} else {
-			// the resource already has an origin annotation, so we
-			// record the provided origin as a transformation
-			err = res.AddTransformation(origin)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// RemoveTransformerAnnotations implements ResMap
-func (m *resWrangler) RemoveTransformerAnnotations() error {
-	for _, res := range m.rList {
-		if err := res.ClearTransformations(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (m *resWrangler) appendReplaceOrMerge(res *resource.Resource) error {
 	id := res.CurId()
 	matches := m.GetMatchingResourcesByAnyId(id.Equals)
@@ -579,18 +507,9 @@ func (m *resWrangler) appendReplaceOrMerge(res *resource.Resource) error {
 		case types.BehaviorReplace:
 			res.CopyMergeMetaDataFieldsFrom(old)
 		case types.BehaviorMerge:
-			// ensure the origin annotation doesn't get overwritten
-			orig, err := old.GetOrigin()
-			if err != nil {
-				return err
-			}
 			res.CopyMergeMetaDataFieldsFrom(old)
 			res.MergeDataMapFrom(old)
 			res.MergeBinaryDataMapFrom(old)
-			if orig != nil {
-				res.SetOrigin(orig)
-			}
-
 		default:
 			return fmt.Errorf(
 				"id %#v exists; behavior must be merge or replace", id)
@@ -608,19 +527,6 @@ func (m *resWrangler) appendReplaceOrMerge(res *resource.Resource) error {
 			"found multiple objects %v that could accept merge of %v",
 			matches, id)
 	}
-}
-
-// AnnotateAll implements ResMap
-func (m *resWrangler) AnnotateAll(key string, value string) error {
-	return m.ApplyFilter(annotations.Filter{
-		Annotations: map[string]string{
-			key: value,
-		},
-		FsSlice: []types.FieldSpec{{
-			Path:               "metadata/annotations",
-			CreateIfNotPresent: true,
-		}},
-	})
 }
 
 // Select returns a list of resources that
@@ -680,19 +586,9 @@ func (m *resWrangler) Select(s types.Selector) ([]*resource.Resource, error) {
 func (m *resWrangler) ToRNodeSlice() []*kyaml.RNode {
 	result := make([]*kyaml.RNode, len(m.rList))
 	for i := range m.rList {
-		result[i] = m.rList[i].Copy()
+		result[i] = m.rList[i].AsRNode()
 	}
 	return result
-}
-
-// DeAnchor implements ResMap.
-func (m *resWrangler) DeAnchor() (err error) {
-	for i := range m.rList {
-		if err = m.rList[i].DeAnchor(); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // ApplySmPatch applies the patch, and errors on Id collisions.
@@ -709,7 +605,7 @@ func (m *resWrangler) ApplySmPatch(
 				return err
 			}
 		}
-		if !res.IsNilOrEmpty() {
+		if !res.IsEmpty() {
 			list = append(list, res)
 		}
 	}
@@ -721,44 +617,4 @@ func (m *resWrangler) RemoveBuildAnnotations() {
 	for _, r := range m.rList {
 		r.RemoveBuildAnnotations()
 	}
-}
-
-// ApplyFilter implements ResMap.
-func (m *resWrangler) ApplyFilter(f kio.Filter) error {
-	reverseLookup := make(map[*kyaml.RNode]*resource.Resource, len(m.rList))
-	nodes := make([]*kyaml.RNode, len(m.rList))
-	for i, r := range m.rList {
-		ptr := &(r.RNode)
-		nodes[i] = ptr
-		reverseLookup[ptr] = r
-	}
-	// The filter can modify nodes, but also delete and create them.
-	// The filtered list might be smaller or larger than the nodes list.
-	filtered, err := f.Filter(nodes)
-	if err != nil {
-		return err
-	}
-	// Rebuild the resmap from the filtered RNodes.
-	var nRList []*resource.Resource
-	for _, rn := range filtered {
-		if rn.IsNilOrEmpty() {
-			// A node might make it through the filter as an object,
-			// but still be empty.  Drop such entries.
-			continue
-		}
-		res, ok := reverseLookup[rn]
-		if !ok {
-			// A node was created; make a Resource to wrap it.
-			res = &resource.Resource{
-				RNode: *rn,
-				// Leave remaining fields empty.
-				// At at time of writing, seeking to eliminate those fields.
-				// Alternatively, could just return error on creation attempt
-				// until remaining fields eliminated.
-			}
-		}
-		nRList = append(nRList, res)
-	}
-	m.rList = nRList
-	return nil
 }

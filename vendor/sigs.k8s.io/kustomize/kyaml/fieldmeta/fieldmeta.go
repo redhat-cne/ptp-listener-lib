@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"k8s.io/kube-openapi/pkg/validation/spec"
+	"github.com/go-openapi/spec"
 	"sigs.k8s.io/kustomize/kyaml/errors"
 	"sigs.k8s.io/kustomize/kyaml/openapi"
 	"sigs.k8s.io/kustomize/kyaml/yaml"

@@ -12,11 +12,11 @@ import (
 	"strconv"
 	"time"
 
+	"sigs.k8s.io/kustomize/api/filesys"
 	"sigs.k8s.io/kustomize/api/konfig"
 	"sigs.k8s.io/kustomize/api/resmap"
 	"sigs.k8s.io/kustomize/api/resource"
 	"sigs.k8s.io/kustomize/api/types"
-	"sigs.k8s.io/kustomize/kyaml/filesys"
 	"sigs.k8s.io/yaml"
 )
 
@@ -137,9 +137,7 @@ func GetResMapWithIDAnnotation(rm resmap.ResMap) (resmap.ResMap, error) {
 		}
 		annotations := r.GetAnnotations()
 		annotations[idAnnotation] = string(idString)
-		if err = r.SetAnnotations(annotations); err != nil {
-			return nil, err
-		}
+		r.SetAnnotations(annotations)
 	}
 	return inputRM, nil
 }
@@ -160,10 +158,7 @@ func UpdateResMapValues(pluginName string, h *resmap.PluginHelpers, output []byt
 	}
 
 	for _, r := range resources {
-		// stale--not manipulated by plugin transformers
-		if err = removeIDAnnotation(r); err != nil {
-			return err
-		}
+		removeIDAnnotation(r) // stale--not manipulated by plugin transformers
 
 		// Add to the new map, checking for duplicates
 		if err := newMap.Append(r); err != nil {
@@ -180,7 +175,7 @@ func UpdateResMapValues(pluginName string, h *resmap.PluginHelpers, output []byt
 			return err
 		}
 		if oldIdx != -1 {
-			rm.GetByIndex(oldIdx).ResetRNode(r)
+			rm.GetByIndex(oldIdx).ResetPrimaryData(r)
 		} else {
 			if err := rm.Append(r); err != nil {
 				return err
@@ -192,20 +187,21 @@ func UpdateResMapValues(pluginName string, h *resmap.PluginHelpers, output []byt
 	for _, id := range rm.AllIds() {
 		newIdx, _ := newMap.GetIndexOfCurrentId(id)
 		if newIdx == -1 {
-			if err = rm.Remove(id); err != nil {
-				return err
-			}
+			rm.Remove(id)
 		}
 	}
 
 	return nil
 }
 
-func removeIDAnnotation(r *resource.Resource) error {
+func removeIDAnnotation(r *resource.Resource) {
 	// remove the annotation set by Kustomize to track the resource
 	annotations := r.GetAnnotations()
 	delete(annotations, idAnnotation)
-	return r.SetAnnotations(annotations)
+	if len(annotations) == 0 {
+		annotations = nil
+	}
+	r.SetAnnotations(annotations)
 }
 
 // UpdateResourceOptions updates the generator options for each resource in the
@@ -228,13 +224,14 @@ func UpdateResourceOptions(rm resmap.ResMap) (resmap.ResMap, error) {
 		}
 		delete(annotations, HashAnnotation)
 		delete(annotations, BehaviorAnnotation)
-		if err := r.SetAnnotations(annotations); err != nil {
-			return nil, err
+		if len(annotations) == 0 {
+			annotations = nil
 		}
-		if needsHash {
-			r.EnableHashSuffix()
-		}
-		r.SetBehavior(types.NewGenerationBehavior(behavior))
+		r.SetAnnotations(annotations)
+		r.SetOptions(types.NewGenArgs(
+			&types.GeneratorArgs{
+				Behavior: behavior,
+				Options:  &types.GeneratorOptions{DisableNameSuffixHash: !needsHash}}))
 	}
 	return rm, nil
 }

@@ -42,7 +42,7 @@ const (
 	BploLoadFromFileSys
 )
 
-// FnPluginLoadingOptions set way functions-based plugins are restricted
+// FnPluginLoadingOptions set way functions-based pluing are restricted
 type FnPluginLoadingOptions struct {
 	// Allow to run executables
 	EnableExec bool
@@ -55,8 +55,4 @@ type FnPluginLoadingOptions struct {
 	Mounts []string
 	// list of env variables to pass to fn
 	Env []string
-	// Run as uid and gid of the command executor
-	AsCurrentUser bool
-	// Run in this working directory
-	WorkingDir string
 }

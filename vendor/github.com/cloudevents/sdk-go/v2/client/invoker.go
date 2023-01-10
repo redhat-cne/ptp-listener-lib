@@ -128,7 +128,7 @@ func (r *receiveInvoker) IsResponder() bool {
 func computeInboundContext(message binding.Message, fallback context.Context, inboundContextDecorators []func(context.Context, binding.Message) context.Context) context.Context {
 	result := fallback
 	if mctx, ok := message.(binding.MessageContext); ok {
-		result = cecontext.ValuesDelegating(mctx.Context(), fallback)
+		result = mctx.Context()
 	}
 	for _, f := range inboundContextDecorators {
 		result = f(result, message)

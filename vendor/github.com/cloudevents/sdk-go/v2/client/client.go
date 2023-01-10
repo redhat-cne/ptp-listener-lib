@@ -97,7 +97,6 @@ type ceClient struct {
 	receiverMu                sync.Mutex
 	eventDefaulterFns         []EventDefaulter
 	pollGoroutines            int
-	blockingCallback          bool
 }
 
 func (c *ceClient) applyOptions(opts ...Option) error {
@@ -249,22 +248,14 @@ func (c *ceClient) StartReceiver(ctx context.Context, fn interface{}) error {
 					continue
 				}
 
-				callback := func() {
+				// Do not block on the invoker.
+				wg.Add(1)
+				go func() {
 					if err := c.invoker.Invoke(ctx, msg, respFn); err != nil {
 						cecontext.LoggerFrom(ctx).Warn("Error while handling a message: ", err)
 					}
-				}
-
-				if c.blockingCallback {
-					callback()
-				} else {
-					// Do not block on the invoker.
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						callback()
-					}()
-				}
+					wg.Done()
+				}()
 			}
 		}()
 	}

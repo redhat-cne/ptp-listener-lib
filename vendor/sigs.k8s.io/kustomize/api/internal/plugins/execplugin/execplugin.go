@@ -89,10 +89,7 @@ type argsConfig struct {
 
 func (p *ExecPlugin) processOptionalArgsFields() error {
 	var c argsConfig
-	err := yaml.Unmarshal(p.cfg, &c)
-	if err != nil {
-		return err
-	}
+	yaml.Unmarshal(p.cfg, &c)
 	if c.ArgsOneLiner != "" {
 		p.args, _ = shlex.Split(c.ArgsOneLiner)
 	}

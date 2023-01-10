@@ -1,6 +1,3 @@
-// Copyright 2022 The Kubernetes Authors.
-// SPDX-License-Identifier: Apache-2.0
-
 package nameref
 
 import (
@@ -9,11 +6,11 @@ import (
 
 	"github.com/pkg/errors"
 	"sigs.k8s.io/kustomize/api/filters/fieldspec"
+	"sigs.k8s.io/kustomize/api/resid"
 	"sigs.k8s.io/kustomize/api/resmap"
 	"sigs.k8s.io/kustomize/api/resource"
 	"sigs.k8s.io/kustomize/api/types"
 	"sigs.k8s.io/kustomize/kyaml/kio"
-	"sigs.k8s.io/kustomize/kyaml/resid"
 	"sigs.k8s.io/kustomize/kyaml/yaml"
 )
 
@@ -59,7 +56,6 @@ func (f Filter) run(node *yaml.RNode) (*yaml.RNode, error) {
 		// sanity check.
 		return nil, err
 	}
-	f.NameFieldToUpdate.Gvk = f.Referrer.GetGvk()
 	if err := node.PipeE(fieldspec.Filter{
 		FieldSpec: f.NameFieldToUpdate,
 		SetValue:  f.set,
@@ -118,9 +114,7 @@ func (f Filter) setMapping(node *yaml.RNode) error {
 		return err
 	}
 	oldName := nameNode.YNode().Value
-	// use allNamesAndNamespacesAreTheSame to compare referral candidates for functional identity,
-	// because we source both name and namespace values from the referral in this case.
-	referral, err := f.selectReferral(oldName, candidates, allNamesAndNamespacesAreTheSame)
+	referral, err := f.selectReferral(oldName, candidates)
 	if err != nil || referral == nil {
 		// Nil referral means nothing to do.
 		return err
@@ -169,10 +163,8 @@ func (f Filter) filterMapCandidatesByNamespace(
 }
 
 func (f Filter) setScalar(node *yaml.RNode) error {
-	// use allNamesAreTheSame to compare referral candidates for functional identity,
-	// because we only source the name from the referral in this case.
 	referral, err := f.selectReferral(
-		node.YNode().Value, f.ReferralCandidates.Resources(), allNamesAreTheSame)
+		node.YNode().Value, f.ReferralCandidates.Resources())
 	if err != nil || referral == nil {
 		// Nil referral means nothing to do.
 		return err
@@ -192,7 +184,7 @@ func (f Filter) recordTheReferral(referral *resource.Resource) {
 
 // getRoleRefGvk returns a Gvk in the roleRef field. Return error
 // if the roleRef, roleRef/apiGroup or roleRef/kind is missing.
-func getRoleRefGvk(n *resource.Resource) (*resid.Gvk, error) {
+func getRoleRefGvk(n *yaml.RNode) (*resid.Gvk, error) {
 	roleRef, err := n.Pipe(yaml.Lookup("roleRef"))
 	if err != nil {
 		return nil, err
@@ -265,7 +257,8 @@ func previousIdSelectedByGvk(gvk *resid.Gvk) sieveFunc {
 
 // If the we are updating a 'roleRef/name' field, the 'apiGroup' and 'kind'
 // fields in the same 'roleRef' map must be considered.
-// If either object is cluster-scoped, there can be a referral.
+// If either object is cluster-scoped (!IsNamespaceableKind), there
+// can be a referral.
 // E.g. a RoleBinding (which exists in a namespace) can refer
 // to a ClusterRole (cluster-scoped) object.
 // https://kubernetes.io/docs/reference/access-authn-authz/rbac/#role-and-clusterrole
@@ -277,7 +270,7 @@ func (f Filter) roleRefFilter() sieveFunc {
 	if !strings.HasSuffix(f.NameFieldToUpdate.Path, "roleRef/name") {
 		return acceptAll
 	}
-	roleRefGvk, err := getRoleRefGvk(f.Referrer)
+	roleRefGvk, err := getRoleRefGvk(f.Referrer.AsRNode())
 	if err != nil {
 		return acceptAll
 	}
@@ -292,12 +285,12 @@ func prefixSuffixEquals(other resource.ResCtx) sieveFunc {
 
 func (f Filter) sameCurrentNamespaceAsReferrer() sieveFunc {
 	referrerCurId := f.Referrer.CurId()
-	if referrerCurId.IsClusterScoped() {
+	if !referrerCurId.IsNamespaceableKind() {
 		// If the referrer is cluster-scoped, let anything through.
 		return acceptAll
 	}
 	return func(r *resource.Resource) bool {
-		if r.CurId().IsClusterScoped() {
+		if !r.CurId().IsNamespaceableKind() {
 			// Allow cluster-scoped through.
 			return true
 		}
@@ -315,9 +308,7 @@ func (f Filter) sameCurrentNamespaceAsReferrer() sieveFunc {
 func (f Filter) selectReferral(
 	// The name referral that may need to be updated.
 	oldName string,
-	candidates []*resource.Resource,
-	// function that returns whether two referrals are identical for the purposes of the transformation
-	candidatesIdentical func(resources []*resource.Resource) bool) (*resource.Resource, error) {
+	candidates []*resource.Resource) (*resource.Resource, error) {
 	candidates = doSieve(candidates, previousNameMatches(oldName))
 	candidates = doSieve(candidates, previousIdSelectedByGvk(&f.ReferralTarget))
 	candidates = doSieve(candidates, f.roleRefFilter())
@@ -332,38 +323,30 @@ func (f Filter) selectReferral(
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	if candidatesIdentical(candidates) {
+	if allNamesAreTheSame(candidates) {
 		// Just take the first one.
 		return candidates[0], nil
 	}
 	ids := getIds(candidates)
-	return nil, fmt.Errorf("found multiple possible referrals: %s\n%s", ids, f.failureDetails(candidates))
+	f.failureDetails(candidates)
+	return nil, fmt.Errorf(" found multiple possible referrals: %s", ids)
 }
 
-func (f Filter) failureDetails(resources []*resource.Resource) string {
-	msg := strings.Builder{}
-	msg.WriteString(fmt.Sprintf("\n**** Too many possible referral targets to referrer:\n%s\n", f.Referrer.MustYaml()))
+func (f Filter) failureDetails(resources []*resource.Resource) {
+	fmt.Printf(
+		"\n**** Too many possible referral targets to referrer:\n%s\n",
+		f.Referrer.MustYaml())
 	for i, r := range resources {
-		msg.WriteString(fmt.Sprintf("--- possible referral %d:\n%s\n", i, r.MustYaml()))
+		fmt.Printf(
+			"--- possible referral %d:\n%s", i, r.MustYaml())
+		fmt.Println("------")
 	}
-	return msg.String()
 }
 
 func allNamesAreTheSame(resources []*resource.Resource) bool {
 	name := resources[0].GetName()
 	for i := 1; i < len(resources); i++ {
 		if name != resources[i].GetName() {
-			return false
-		}
-	}
-	return true
-}
-
-func allNamesAndNamespacesAreTheSame(resources []*resource.Resource) bool {
-	name := resources[0].GetName()
-	namespace := resources[0].GetNamespace()
-	for i := 1; i < len(resources); i++ {
-		if name != resources[i].GetName() || namespace != resources[i].GetNamespace() {
 			return false
 		}
 	}

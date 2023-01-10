@@ -40,13 +40,6 @@ func MakeConfigMap(
 	if err = rn.LoadMapIntoConfigMapData(m); err != nil {
 		return nil, err
 	}
-	err = copyLabelsAndAnnotations(rn, args.Options)
-	if err != nil {
-		return nil, err
-	}
-	err = setImmutable(rn, args.Options)
-	if err != nil {
-		return nil, err
-	}
+	copyLabelsAndAnnotations(rn, args.Options)
 	return rn, nil
 }

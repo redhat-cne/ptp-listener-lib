@@ -4,14 +4,12 @@
 package kio
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 
-	gitignore "github.com/monochromegane/go-gitignore"
+	"github.com/monochromegane/go-gitignore"
 	"sigs.k8s.io/kustomize/kyaml/ext"
-	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
 
 // ignoreFilesMatcher handles `.krmignore` files, which allows for ignoring
@@ -34,7 +32,6 @@ import (
 //   is set to true
 type ignoreFilesMatcher struct {
 	matchers []matcher
-	fs       filesys.FileSystemOrOnDisk
 }
 
 // readIgnoreFile checks whether there is a .krmignore file in the path, and
@@ -42,9 +39,9 @@ type ignoreFilesMatcher struct {
 // we just add a matcher that match nothing.
 func (i *ignoreFilesMatcher) readIgnoreFile(path string) error {
 	i.verifyPath(path)
-	f, err := i.fs.Open(filepath.Join(path, ext.IgnoreFileName()))
+	m, err := gitignore.NewGitIgnore(filepath.Join(path, ext.IgnoreFileName()))
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			i.matchers = append(i.matchers, matcher{
 				matcher:  gitignore.DummyIgnoreMatcher(false),
 				basePath: path,
@@ -53,10 +50,8 @@ func (i *ignoreFilesMatcher) readIgnoreFile(path string) error {
 		}
 		return err
 	}
-	defer f.Close()
-
 	i.matchers = append(i.matchers, matcher{
-		matcher:  gitignore.NewGitIgnoreFromReader(path, f),
+		matcher:  m,
 		basePath: path,
 	})
 	return nil

@@ -4,9 +4,7 @@
 package imagetag
 
 import (
-	"sigs.k8s.io/kustomize/api/internal/utils"
 	"sigs.k8s.io/kustomize/api/types"
-	"sigs.k8s.io/kustomize/kyaml/errors"
 	"sigs.k8s.io/kustomize/kyaml/kio"
 	"sigs.k8s.io/kustomize/kyaml/yaml"
 )
@@ -76,15 +74,26 @@ func (f findFieldsFilter) walk(node *yaml.RNode) error {
 				return err
 			}
 			key := n.Key.YNode().Value
-			if utils.StringSliceContains(f.fields, key) {
+			if contains(f.fields, key) {
 				return f.fieldCallback(n.Value)
 			}
 			return nil
 		})
 	case yaml.SequenceNode:
-		return errors.Wrap(node.VisitElements(f.walk))
+		return node.VisitElements(func(n *yaml.RNode) error {
+			return f.walk(n)
+		})
 	}
 	return nil
+}
+
+func contains(slice []string, str string) bool {
+	for _, s := range slice {
+		if s == str {
+			return true
+		}
+	}
+	return false
 }
 
 func checkImageTagsFn(imageTag types.Image) fieldCallback {

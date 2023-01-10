@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/go-openapi/spec"
 	"github.com/pkg/errors"
-	"k8s.io/kube-openapi/pkg/validation/spec"
+	"sigs.k8s.io/kustomize/api/filesys"
 	"sigs.k8s.io/kustomize/api/ifc"
 	"sigs.k8s.io/kustomize/api/internal/plugins/builtinconfig"
+	"sigs.k8s.io/kustomize/api/resid"
 	"sigs.k8s.io/kustomize/api/types"
-	"sigs.k8s.io/kustomize/kyaml/filesys"
-	"sigs.k8s.io/kustomize/kyaml/resid"
 	"sigs.k8s.io/yaml"
 )
 
@@ -178,12 +178,9 @@ func loadCrdIntoConfig(
 			}
 		}
 		if property.Ref.GetURL() != nil {
-			err = loadCrdIntoConfig(
+			loadCrdIntoConfig(
 				theConfig, theGvk, theMap,
 				property.Ref.String(), append(path, propName))
-			if err != nil {
-				return
-			}
 		}
 	}
 	return nil
