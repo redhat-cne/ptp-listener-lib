@@ -75,6 +75,6 @@ require (
 
 require (
 	github.com/anthhub/forwarder v1.1.0
-	github.com/test-network-function/ptp-listener-exports v0.0.2
+	github.com/test-network-function/ptp-listener-exports v0.0.3
 
 )
