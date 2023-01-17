@@ -1,6 +1,7 @@
 package listenerlib
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -10,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"sync"
 	"time"
 
 	"log"
@@ -19,36 +19,53 @@ import (
 	"github.com/anthhub/forwarder"
 	"github.com/redhat-cne/sdk-go/pkg/event"
 	ptpEvent "github.com/redhat-cne/sdk-go/pkg/event/ptp"
+	"github.com/redhat-cne/sdk-go/pkg/pubsub"
 	"github.com/sirupsen/logrus"
 	exports "github.com/test-network-function/ptp-listener-exports"
 
-	"github.com/google/uuid"
-	httpevents "github.com/redhat-cne/sdk-go/pkg/protocol/http"
-	"github.com/redhat-cne/sdk-go/pkg/pubsub"
-	"github.com/redhat-cne/sdk-go/pkg/subscriber"
 	"github.com/redhat-cne/sdk-go/pkg/types"
+	api "github.com/redhat-cne/sdk-go/v1/pubsub"
 	chanpubsub "github.com/test-network-function/channel-pubsub"
 )
 
+const (
+	SubscriptionPath  = "/api/cloudNotifications/v1/subscriptions"
+	LocalEventPath    = "/event"
+	LocalHealthPath   = "/health"
+	LocalAckEventPath = "/ack/event"
+	HTTP200           = 200
+)
+
 var (
-	Ps *chanpubsub.Pubsub
+	Ps                           *chanpubsub.Pubsub
+	CurrentSubscriptionIDPerType map[string]string
+	localListeningEndpoint       string
 )
 
 func InitPubSub() {
 	Ps = chanpubsub.NewPubsub()
 }
 
-func initSubscribers() map[string]string {
-	subscribeTo := make(map[string]string)
-	subscribeTo[string(ptpEvent.OsClockSyncStateChange)] = string(ptpEvent.OsClockSyncState)
-	return subscribeTo
+func initResources(nodeName string) (resourceList []string) {
+	CurrentSubscriptionIDPerType = make(map[string]string)
+	// adding support for OsClockSyncState
+	resourceList = append(resourceList, fmt.Sprintf(resourcePrefix, nodeName, string(ptpEvent.OsClockSyncState)))
+	// add more events here
+	return
+}
+
+var HTTPClient = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConnsPerHost: 20,
+	},
+	Timeout: 10 * time.Second,
 }
 
 // Consumer webserver
 func server(localListeningEndpoint string) {
-	http.HandleFunc("/event", getEvent)
-	http.HandleFunc("/health", health)
-	http.HandleFunc("/ack/event", ackEvent)
+	http.HandleFunc(LocalEventPath, getEvent)
+	http.HandleFunc(LocalHealthPath, health)
+	http.HandleFunc(LocalAckEventPath, ackEvent)
 	server := &http.Server{
 		Addr:              localListeningEndpoint,
 		ReadHeaderTimeout: 3 * time.Second,
@@ -75,10 +92,13 @@ func health(w http.ResponseWriter, req *http.Request) {
 
 func getEvent(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
-
 	aSource := req.Header.Get("Ce-Source")
 	aType := req.Header.Get("Ce-Type")
 	aTime, err := types.ParseTimestamp(req.Header.Get("Ce-Time"))
+	if aTime == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if err != nil {
 		logrus.Error(err)
 	}
@@ -126,58 +146,110 @@ const (
 )
 
 func RegisterAnWaitForEvents(kubernetesHost, nodeName, apiAddr string) {
-	subscribeTo := initSubscribers()
-	var wg sync.WaitGroup
-	wg.Add(1)
-	localListeningEndpoint := GetOutboundIP(kubernetesHost).String() + localListeningPort
+	supportedResources := initResources(nodeName)
+	localListeningEndpoint = GetOutboundIP(kubernetesHost).String() + localListeningPort
 	go server(localListeningPort) // spin local api
 	time.Sleep(sleepSeconds * time.Second)
-
-	var subs []pubsub.PubSub
-	for _, resource := range subscribeTo {
-		subs = append(subs, pubsub.PubSub{
-			ID:       uuid.New().String(),
-			Resource: fmt.Sprintf(resourcePrefix, nodeName, resource),
-		})
-	}
-
-	// if AMQ enabled the subscription will create an AMQ listener client
-	// IF HTTP enabled, the subscription will post a subscription  requested to all
-	// publishers that are defined in http-event-publisher variable
-
-	e := createSubscription(subs, apiAddr, localListeningEndpoint)
-	if e != nil {
-		logrus.Error(e)
-		return
+	for _, resource := range supportedResources {
+		err := SubscribeAllEvents(resource, apiAddr, localListeningEndpoint)
+		if err != nil {
+			logrus.Errorf("could not register resource=%s at api addr=%s with endpoint=%s , err=%s", resource, apiAddr, localListeningEndpoint, err)
+		}
 	}
 	logrus.Info("waiting for events")
 }
 
-func createSubscription(subscriptions []pubsub.PubSub, apiAddr, localAPIAddr string) (err error) {
+func UnsubscribeAllEvents(kubernetesHost, nodeName, apiAddr string) {
+	if localListeningEndpoint == "" {
+		logrus.Error("local endpoint not available, cannot unsubscribe events")
+		return
+	}
+	supportedResources := initResources(nodeName)
+	time.Sleep(sleepSeconds * time.Second)
+	for _, resource := range supportedResources {
+		err := deleteSubscription(resource, apiAddr)
+		if err != nil {
+			logrus.Errorf("could not delete resource=%s at api addr=%s with endpoint=%s , err=%s", resource, apiAddr, localListeningEndpoint, err)
+		}
+	}
+	logrus.Info("waiting for events")
+}
+
+func SubscribeAllEvents(supportedResource, apiAddr, localAPIAddr string) (err error) {
 	subURL := &types.URI{URL: url.URL{Scheme: "http",
 		Host: apiAddr,
-		Path: "subscription"}}
+		Path: SubscriptionPath}}
 	endpointURL := &types.URI{URL: url.URL{Scheme: "http",
 		Host: localAPIAddr,
-		Path: ""}}
+		Path: "event"}}
+	sub := api.NewPubSub(
+		endpointURL,
+		supportedResource)
 
-	subs := subscriber.New(uuid.UUID{})
-	// Self URL
-	_ = subs.SetEndPointURI(endpointURL.String())
-
-	// create a subscriber model
-	subs.AddSubscription(subscriptions...)
-
-	ce, _ := subs.CreateCloudEvents()
-	ce.SetSubject("1")
-	ce.SetSource(subscriptions[0].Resource)
-	ce.SetDataContentType("application/json")
-
-	logrus.Debug(ce)
-
-	if err := httpevents.Post(subURL.String(), *ce); err != nil {
-		return fmt.Errorf("(1)error creating: %v at  %s with data %s=%s", err, subURL.String(), ce.String(), ce.Data())
+	data, err := json.Marshal(&sub)
+	if err != nil {
+		return err
 	}
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", subURL.String(), bytes.NewBuffer(data))
+	if err != nil {
+		logrus.Error(err)
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := HTTPClient.Do(req)
+	if err != nil {
+		logrus.Error(err)
+		return err
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logrus.Errorf("error reading event %v", err)
+	}
+	logrus.Infof("%s", string(bodyBytes))
+	respPubSub := pubsub.PubSub{}
+	err = json.Unmarshal(bodyBytes, &respPubSub)
+	if err != nil {
+		logrus.Errorf("error un-marshaling event %v", err)
+	}
+	logrus.Infof("Subscription to %s created successfully with UUID=%s", supportedResource, respPubSub.ID)
+	CurrentSubscriptionIDPerType[supportedResource] = respPubSub.ID
+	return nil
+}
+func deleteSubscription(supportedResource, apiAddr string) (err error) {
+	subURL := &types.URI{URL: url.URL{Scheme: "http",
+		Host: apiAddr,
+		Path: SubscriptionPath + "/" + CurrentSubscriptionIDPerType[supportedResource]}}
+
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "DELETE", subURL.String(), http.NoBody)
+	if err != nil {
+		logrus.Error(err)
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := HTTPClient.Do(req)
+	if err != nil {
+		logrus.Error(err)
+		return err
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logrus.Errorf("error reading event %v", err)
+	}
+	bodyString := string(bodyBytes)
+
+	if resp.StatusCode != HTTP200 {
+		return fmt.Errorf("failed deleting subscription ID=%s for type %s body=%s", CurrentSubscriptionIDPerType[supportedResource], supportedResource, bodyString)
+	}
+
+	logrus.Infof("subscription ID=%s for type %s deleted successfully", CurrentSubscriptionIDPerType[supportedResource], supportedResource)
 
 	return nil
 }
