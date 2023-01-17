@@ -6,7 +6,7 @@ require (
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/redhat-cne/sdk-go v0.1.1-0.20221202175356-6d25e1b3c0be
 	github.com/sirupsen/logrus v1.9.0
-	github.com/test-network-function/channel-pubsub v0.0.2
+	github.com/test-network-function/channel-pubsub v0.0.3
 )
 
 require (
