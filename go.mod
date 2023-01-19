@@ -64,7 +64,6 @@ require (
 	k8s.io/api v0.21.3 // indirect
 	k8s.io/apimachinery v0.21.3 // indirect
 	k8s.io/cli-runtime v0.21.3 // indirect
-	k8s.io/client-go v0.21.3 // indirect
 	k8s.io/klog/v2 v2.8.0 // indirect
 	k8s.io/utils v0.0.0-20201110183641-67b214c5f920 // indirect
 	sigs.k8s.io/kustomize/api v0.8.8 // indirect
@@ -75,6 +74,8 @@ require (
 
 require (
 	github.com/anthhub/forwarder v1.1.0
+	github.com/onsi/gomega v1.7.0
 	github.com/test-network-function/ptp-listener-exports v0.0.3
+	k8s.io/client-go v0.21.3
 
 )

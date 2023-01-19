@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
-	"os"
 	"strconv"
 
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"net"
 
 	"github.com/anthhub/forwarder"
+
 	"github.com/redhat-cne/sdk-go/pkg/event"
 	ptpEvent "github.com/redhat-cne/sdk-go/pkg/event/ptp"
 	"github.com/redhat-cne/sdk-go/pkg/pubsub"
@@ -34,11 +34,13 @@ const (
 	LocalHealthPath   = "/health"
 	LocalAckEventPath = "/ack/event"
 	HTTP200           = 200
+	attempts          = 20
+	interval          = 5 * time.Second
 )
 
 var (
 	Ps                           *chanpubsub.Pubsub
-	CurrentSubscriptionIDPerType map[string]string
+	CurrentSubscriptionIDPerType = map[string]string{}
 	localListeningEndpoint       string
 )
 
@@ -47,7 +49,6 @@ func InitPubSub() {
 }
 
 func initResources(nodeName string) (resourceList []string) {
-	CurrentSubscriptionIDPerType = make(map[string]string)
 	// adding support for OsClockSyncState
 	resourceList = append(resourceList, fmt.Sprintf(resourcePrefix, nodeName, string(ptpEvent.OsClockSyncState)))
 	// add more events here
@@ -92,37 +93,27 @@ func health(w http.ResponseWriter, req *http.Request) {
 
 func getEvent(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
-	aSource := req.Header.Get("Ce-Source")
-	aType := req.Header.Get("Ce-Type")
-	aTime, err := types.ParseTimestamp(req.Header.Get("Ce-Time"))
-	if aTime == nil {
+	bodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		logrus.Errorf("error reading message  %v", err)
+		return
+	}
+	e := string(bodyBytes)
+	logrus.Trace(e)
+	if len(bodyBytes) == 0 {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+
+	logrus.Debugf("received event %s", string(bodyBytes))
+
+	aEvent, aType, err := createStoredEvent(bodyBytes)
 	if err != nil {
-		logrus.Error(err)
+		logrus.Errorf("could not create event %s", err)
+		return
 	}
-	logrus.Debug(aTime.String())
-	logrus.Debug(aSource)
-
-	bodyBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		logrus.Errorf("error reading event %v", err)
-	}
-	e := string(bodyBytes)
-
-	if e != "" {
-		logrus.Debugf("received event %s", string(bodyBytes))
-
-		aEvent, err := createStoredEvent(aSource, aType, aTime.Time, bodyBytes)
-		if err != nil {
-			logrus.Errorf("could not create event %s", err)
-		}
-		logrus.Info(aEvent)
-		Ps.Publish(aType, aEvent)
-	} else {
-		w.WriteHeader(http.StatusNoContent)
-	}
+	logrus.Info(aEvent)
+	Ps.Publish(aType, aEvent)
 }
 
 func ackEvent(w http.ResponseWriter, req *http.Request) {
@@ -130,6 +121,7 @@ func ackEvent(w http.ResponseWriter, req *http.Request) {
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		logrus.Errorf("error reading acknowledgment  %v", err)
+		return
 	}
 	e := string(bodyBytes)
 	if e != "" {
@@ -140,16 +132,15 @@ func ackEvent(w http.ResponseWriter, req *http.Request) {
 }
 
 const (
-	resourcePrefix     string = "/cluster/node/%s%s"
-	localListeningPort string = ":8989"
-	sleepSeconds              = 5
+	resourcePrefix string = "/cluster/node/%s%s"
+	sleep5s               = 5 * time.Second
 )
 
-func RegisterAnWaitForEvents(kubernetesHost, nodeName, apiAddr string) {
+func SubscribeAnWaitForAllEvents(kubernetesHost, nodeName, apiAddr string, localHTTPServerPort int) {
 	supportedResources := initResources(nodeName)
-	localListeningEndpoint = GetOutboundIP(kubernetesHost).String() + localListeningPort
-	go server(localListeningPort) // spin local api
-	time.Sleep(sleepSeconds * time.Second)
+	localListeningEndpoint = fmt.Sprintf("%s:%d", GetOutboundIP(kubernetesHost).String(), localHTTPServerPort)
+	go server(fmt.Sprintf(":%d", localHTTPServerPort)) // spin local api
+	time.Sleep(sleep5s)
 	for _, resource := range supportedResources {
 		err := SubscribeAllEvents(resource, apiAddr, localListeningEndpoint)
 		if err != nil {
@@ -159,20 +150,18 @@ func RegisterAnWaitForEvents(kubernetesHost, nodeName, apiAddr string) {
 	logrus.Info("waiting for events")
 }
 
-func UnsubscribeAllEvents(kubernetesHost, nodeName, apiAddr string) {
+func UnsubscribeAllEvents(kubernetesHost, nodeName string) {
 	if localListeningEndpoint == "" {
 		logrus.Error("local endpoint not available, cannot unsubscribe events")
 		return
 	}
 	supportedResources := initResources(nodeName)
-	time.Sleep(sleepSeconds * time.Second)
 	for _, resource := range supportedResources {
-		err := deleteSubscription(resource, apiAddr)
+		err := deleteSubscription(resource, kubernetesHost)
 		if err != nil {
-			logrus.Errorf("could not delete resource=%s at api addr=%s with endpoint=%s , err=%s", resource, apiAddr, localListeningEndpoint, err)
+			logrus.Errorf("could not delete resource=%s at api addr=%s with endpoint=%s , err=%s", resource, kubernetesHost, localListeningEndpoint, err)
 		}
 	}
-	logrus.Info("waiting for events")
 }
 
 func SubscribeAllEvents(supportedResource, apiAddr, localAPIAddr string) (err error) {
@@ -188,7 +177,7 @@ func SubscribeAllEvents(supportedResource, apiAddr, localAPIAddr string) (err er
 
 	data, err := json.Marshal(&sub)
 	if err != nil {
-		return err
+		return fmt.Errorf("error marshalling, err=%s", err)
 	}
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
@@ -196,29 +185,30 @@ func SubscribeAllEvents(supportedResource, apiAddr, localAPIAddr string) (err er
 	req, err := http.NewRequestWithContext(ctx, "POST", subURL.String(), bytes.NewBuffer(data))
 	if err != nil {
 		logrus.Error(err)
-		return err
+		return fmt.Errorf("error building http request, err=%s", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := HTTPClient.Do(req)
 	if err != nil {
 		logrus.Error(err)
-		return err
+		return fmt.Errorf("error sending http request, err=%s", err)
 	}
 	defer resp.Body.Close()
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logrus.Errorf("error reading event %v", err)
+		return fmt.Errorf("error reading event %v", err)
 	}
 	logrus.Infof("%s", string(bodyBytes))
 	respPubSub := pubsub.PubSub{}
 	err = json.Unmarshal(bodyBytes, &respPubSub)
 	if err != nil {
-		logrus.Errorf("error un-marshaling event %v", err)
+		return fmt.Errorf("error un-marshaling event %v", err)
 	}
-	logrus.Infof("Subscription to %s created successfully with UUID=%s", supportedResource, respPubSub.ID)
+	logrus.Infof("Subscription to %s created successfully with UUID=%s  at URL=%s", supportedResource, respPubSub.ID, subURL)
 	CurrentSubscriptionIDPerType[supportedResource] = respPubSub.ID
 	return nil
 }
+
 func deleteSubscription(supportedResource, apiAddr string) (err error) {
 	subURL := &types.URI{URL: url.URL{Scheme: "http",
 		Host: apiAddr,
@@ -230,18 +220,17 @@ func deleteSubscription(supportedResource, apiAddr string) (err error) {
 	req, err := http.NewRequestWithContext(ctx, "DELETE", subURL.String(), http.NoBody)
 	if err != nil {
 		logrus.Error(err)
-		return err
+		return fmt.Errorf("error building http request, err=%s", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := HTTPClient.Do(req)
 	if err != nil {
-		logrus.Error(err)
-		return err
+		return fmt.Errorf("error sending http request, err=%s", err)
 	}
 	defer resp.Body.Close()
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logrus.Errorf("error reading event %v", err)
+		return fmt.Errorf("error reading event %v", err)
 	}
 	bodyString := string(bodyBytes)
 
@@ -249,7 +238,7 @@ func deleteSubscription(supportedResource, apiAddr string) (err error) {
 		return fmt.Errorf("failed deleting subscription ID=%s for type %s body=%s", CurrentSubscriptionIDPerType[supportedResource], supportedResource, bodyString)
 	}
 
-	logrus.Infof("subscription ID=%s for type %s deleted successfully", CurrentSubscriptionIDPerType[supportedResource], supportedResource)
+	logrus.Infof("subscription ID=%s for type %s deleted successfully at URL=%s", CurrentSubscriptionIDPerType[supportedResource], supportedResource, subURL)
 
 	return nil
 }
@@ -273,66 +262,93 @@ func GetOutboundIP(aURL string) net.IP {
 }
 
 func StartListening(ptpEventServiceLocalhostPort,
-	ptpEventServiceRemotePort int,
+	ptpEventServiceRemotePort,
+	localHTTPServerPort int,
 	ptpPodName,
 	nodeName,
 	ptpNs,
 	kubeconfigPath,
 	kubernetesHost string,
-) error {
-	options := []*forwarder.Option{
-		{
-			LocalPort:  ptpEventServiceLocalhostPort,
-			RemotePort: ptpEventServiceRemotePort,
-			Namespace:  ptpNs,
-			PodName:    ptpPodName,
-		},
-	}
+) (err error) {
 	logrus.Infof("Forwarding to pod: %s node: %s", ptpPodName, nodeName)
+	var ret *forwarder.Result
+	defer closeForwarder(ret)
+	err = retry(attempts, interval, func() (err error) {
+		options := []*forwarder.Option{
+			{
+				LocalPort:  ptpEventServiceLocalhostPort,
+				RemotePort: ptpEventServiceRemotePort,
+				Namespace:  ptpNs,
+				PodName:    ptpPodName,
+			},
+		}
+		logrus.Infof("Forwarding to pod: %s node: %s", ptpPodName, nodeName)
+		ret, err = forwarder.WithForwarders(context.Background(), options, kubeconfigPath)
+		if err != nil {
+			return fmt.Errorf("could not initialize port forwarding, err=%s", err)
+		}
 
-	ret, err := forwarder.WithForwarders(context.Background(), options, kubeconfigPath)
+		// wait forwarding ready
+		// the remote and local ports are listed
+		ports, err := ret.Ready()
+		logrus.Infof("Ports: %+v", ports)
+		if err != nil {
+			return fmt.Errorf("could not initialize port forwarding, err=%s", err)
+		}
+		return nil
+	})
 	if err != nil {
-		logrus.Error("WithForwarders err: ", err)
-		os.Exit(1)
+		return err
 	}
-	// remember to close the forwarding
-	defer ret.Close()
-	// wait forwarding ready
-	// the remote and local ports are listed
-	ports, err := ret.Ready()
-	if err != nil {
-		ret.Close()
-		return fmt.Errorf("could not initialize port forwarding, err=%s", err)
-	}
-	fmt.Printf("ports: %+v\n", ports)
-	RegisterAnWaitForEvents(kubernetesHost, nodeName, "localhost:"+strconv.Itoa(ptpEventServiceLocalhostPort))
+	SubscribeAnWaitForAllEvents(kubernetesHost, nodeName, "localhost:"+strconv.Itoa(ptpEventServiceLocalhostPort), localHTTPServerPort)
 	return nil
 }
 
-func createStoredEvent(source, eventType string, eventTime time.Time, data []byte) (aStoredEvent exports.StoredEvent, err error) {
-	var e event.Data
+func closeForwarder(ret *forwarder.Result) {
+	if ret != nil {
+		ret.Close()
+	}
+}
+
+func retry(attempts int, sleep time.Duration, f func() error) (err error) {
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			log.Println("retrying after error:", err)
+			time.Sleep(sleep)
+			sleep *= 2
+		}
+		err = f()
+		if err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("after %d attempts, last error: %s", attempts, err)
+}
+
+func createStoredEvent(data []byte) (aStoredEvent exports.StoredEvent, aType string, err error) {
+	var e event.Event
 	err = json.Unmarshal(data, &e)
 	if err != nil {
-		return aStoredEvent, err
+		return aStoredEvent, aType, err
 	}
 	logrus.Debug(e)
 
 	// Note that there is no UnixMillis, so to get the
 	// milliseconds since epoch you'll need to manually
 	// divide from nanoseconds.
-	latency := (time.Now().UnixNano() - eventTime.UnixNano()) / 1000000
+	latency := (time.Now().UnixNano() - e.Time.UnixNano()) / 1000000
 	// set log to Info level for performance measurement
 	logrus.Debugf("Latency for the event: %d ms\n", latency)
 
 	valuesFull := exports.StoredEventValues{}
 	valuesShort := exports.StoredEventValues{}
-	for _, v := range e.Values {
+	for _, v := range e.Data.Values {
 		dataType := string(v.DataType)
 		valueType := string(v.ValueType)
 		resource := v.Resource
 		valuesFull[resource+"_"+dataType+"_"+valueType] = v.Value
 		valuesShort[dataType] = v.Value
 	}
-	return exports.StoredEvent{exports.EventTimeStamp: eventTime, exports.EventType: eventType, exports.EventSource: source,
-		exports.EventValuesFull: valuesFull, exports.EventValuesShort: valuesShort}, nil
+	return exports.StoredEvent{exports.EventTimeStamp: e.Time, exports.EventType: e.Type, exports.EventSource: e.Source,
+		exports.EventValuesFull: valuesFull, exports.EventValuesShort: valuesShort}, e.Type, nil
 }
