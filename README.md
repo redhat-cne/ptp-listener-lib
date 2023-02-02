@@ -24,4 +24,4 @@ Internal dispatch of ptp events is done via the channel-pubsub project, using na
 ![ptp-events-listener-pubsub](doc/ptpevents-pubsub.svg)
 
 ## Example
-An example project is at https://github.com/test-network-function/ptp-listener-example
+An example project is at https://github.com/redhat-cne/ptp-listener-example

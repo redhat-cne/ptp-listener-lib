@@ -17,15 +17,15 @@ import (
 
 	"github.com/anthhub/forwarder"
 
+	exports "github.com/redhat-cne/ptp-listener-exports"
 	"github.com/redhat-cne/sdk-go/pkg/event"
 	ptpEvent "github.com/redhat-cne/sdk-go/pkg/event/ptp"
 	"github.com/redhat-cne/sdk-go/pkg/pubsub"
 	"github.com/sirupsen/logrus"
-	exports "github.com/test-network-function/ptp-listener-exports"
 
+	chanpubsub "github.com/redhat-cne/channel-pubsub"
 	"github.com/redhat-cne/sdk-go/pkg/types"
 	api "github.com/redhat-cne/sdk-go/v1/pubsub"
-	chanpubsub "github.com/test-network-function/channel-pubsub"
 )
 
 const (

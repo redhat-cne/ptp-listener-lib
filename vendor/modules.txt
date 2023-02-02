@@ -125,6 +125,12 @@ github.com/pkg/errors
 # github.com/pmezard/go-difflib v1.0.0
 ## explicit
 github.com/pmezard/go-difflib/difflib
+# github.com/redhat-cne/channel-pubsub v0.0.4
+## explicit; go 1.19
+github.com/redhat-cne/channel-pubsub
+# github.com/redhat-cne/ptp-listener-exports v0.0.4
+## explicit; go 1.19
+github.com/redhat-cne/ptp-listener-exports
 # github.com/redhat-cne/sdk-go v0.1.1-0.20221202175356-6d25e1b3c0be
 ## explicit; go 1.17
 github.com/redhat-cne/sdk-go/pkg/event
@@ -146,12 +152,6 @@ github.com/spf13/pflag
 # github.com/stretchr/testify v1.7.0
 ## explicit; go 1.13
 github.com/stretchr/testify/assert
-# github.com/test-network-function/channel-pubsub v0.0.3
-## explicit; go 1.19
-github.com/test-network-function/channel-pubsub
-# github.com/test-network-function/ptp-listener-exports v0.0.3
-## explicit; go 1.19
-github.com/test-network-function/ptp-listener-exports
 # github.com/xlab/treeprint v0.0.0-20181112141820-a009c3971eca
 ## explicit
 github.com/xlab/treeprint
