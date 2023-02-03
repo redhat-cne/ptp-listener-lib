@@ -10,7 +10,10 @@ import (
 	"sync"
 
 	exports "github.com/redhat-cne/ptp-listener-exports"
+	"github.com/sirupsen/logrus"
 )
+
+const channelBuffer = 10
 
 type Pubsub struct {
 	mu     sync.RWMutex
@@ -25,17 +28,21 @@ func NewPubsub() *Pubsub {
 	return ps
 }
 
-func (ps *Pubsub) Subscribe(topic string) <-chan exports.StoredEvent {
+func (ps *Pubsub) Subscribe(topic string) (chin <-chan exports.StoredEvent, subscriberID int) {
 	ps.mu.Lock()
+	logrus.Debugf("lock Subscribe %s", topic)
+	defer logrus.Debugf("unlock Subscribe %s", topic)
 	defer ps.mu.Unlock()
 
-	ch := make(chan exports.StoredEvent, 1)
+	ch := make(chan exports.StoredEvent, channelBuffer)
 	ps.subs[topic] = append(ps.subs[topic], ch)
-	return ch
+	return ch, len(ps.subs[topic]) - 1
 }
 
 func (ps *Pubsub) Publish(topic string, msg exports.StoredEvent) {
 	ps.mu.RLock()
+	logrus.Debugf("lock Publish %s", topic)
+	defer logrus.Debugf("unlock Publish %s", topic)
 	defer ps.mu.RUnlock()
 
 	if ps.closed {
@@ -43,6 +50,9 @@ func (ps *Pubsub) Publish(topic string, msg exports.StoredEvent) {
 	}
 
 	for _, ch := range ps.subs[topic] {
+		if ch == nil {
+			continue
+		}
 		ch <- msg
 	}
 }
@@ -55,8 +65,26 @@ func (ps *Pubsub) Close() {
 		ps.closed = true
 		for _, subs := range ps.subs {
 			for _, ch := range subs {
+				if ch == nil {
+					continue
+				}
 				close(ch)
 			}
 		}
+	}
+}
+
+func (ps *Pubsub) Unsubscribe(topic string, subscriberID int) {
+	ps.mu.Lock()
+	logrus.Info("lock Unsubscribe")
+	defer logrus.Info("unlock Unsubscribe")
+	defer ps.mu.Unlock()
+	if _, ok := ps.subs[topic]; !ok {
+		logrus.Errorf("Unsubscribe: did not find pubsub topic ID=%s", topic)
+		return
+	}
+	if len(ps.subs[topic]) > subscriberID {
+		close(ps.subs[topic][subscriberID])
+		ps.subs[topic][subscriberID] = nil
 	}
 }
