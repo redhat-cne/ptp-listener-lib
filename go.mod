@@ -74,7 +74,7 @@ require (
 
 require (
 	github.com/anthhub/forwarder v1.1.0
-	github.com/redhat-cne/channel-pubsub v0.0.5
+	github.com/redhat-cne/channel-pubsub v0.0.6
 	github.com/redhat-cne/ptp-listener-exports v0.0.7
 
 )
