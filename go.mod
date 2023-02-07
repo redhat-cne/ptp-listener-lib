@@ -4,7 +4,6 @@ go 1.19
 
 require (
 	github.com/google/uuid v1.3.0 // indirect
-	github.com/redhat-cne/channel-pubsub v0.0.5
 	github.com/redhat-cne/sdk-go v0.1.1-0.20221202175356-6d25e1b3c0be
 	github.com/sirupsen/logrus v1.9.0
 )
@@ -75,6 +74,7 @@ require (
 
 require (
 	github.com/anthhub/forwarder v1.1.0
-	github.com/redhat-cne/ptp-listener-exports v0.0.4
+	github.com/redhat-cne/channel-pubsub v0.0.5
+	github.com/redhat-cne/ptp-listener-exports v0.0.5
 
 )

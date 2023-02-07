@@ -1,6 +1,7 @@
 package exports
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -15,7 +16,6 @@ const (
 	EventSource      = "eventsource"
 	EventValuesFull  = "eventvaluesfull"
 	EventValuesShort = "eventvaluesshort"
-	SessionUID       = "sessionuid"
 )
 
 type StoredEventValues map[string]interface{}
@@ -24,3 +24,12 @@ var (
 	Mu        sync.Mutex
 	AllEvents []StoredEvent
 )
+
+func (event StoredEvent) ToCsv() (out string) {
+	return fmt.Sprintf("%s,%s,%s,%s,%s,%s", event[EventTimeStamp],
+		event[EventName],
+		event[EventType],
+		event[EventSource],
+		event[EventValuesFull],
+		event[EventValuesShort])
+}
