@@ -344,15 +344,10 @@ func createStoredEvent(data []byte) (aStoredEvent exports.StoredEvent, aType str
 	// set log to Info level for performance measurement
 	logrus.Debugf("Latency for the event: %d ms\n", latency)
 
-	valuesFull := exports.StoredEventValues{}
-	valuesShort := exports.StoredEventValues{}
+	values := exports.StoredEventValues{}
 	for _, v := range e.Data.Values {
 		dataType := string(v.DataType)
-		valueType := string(v.ValueType)
-		resource := v.Resource
-		valuesFull[resource+"_"+dataType+"_"+valueType] = v.Value
-		valuesShort[dataType] = v.Value
+		values[dataType] = v.Value
 	}
-	return exports.StoredEvent{exports.EventTimeStamp: e.Time, exports.EventType: e.Type, exports.EventSource: e.Source,
-		exports.EventValuesFull: valuesFull, exports.EventValuesShort: valuesShort}, e.Type, nil
+	return exports.StoredEvent{exports.EventTimeStamp: e.Time, exports.EventType: e.Type, exports.EventSource: e.Source, exports.EventValues: values}, e.Type, nil
 }

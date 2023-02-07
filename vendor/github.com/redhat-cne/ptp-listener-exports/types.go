@@ -10,12 +10,10 @@ const Port9085 = 9085
 type StoredEvent map[string]interface{}
 
 const (
-	EventTimeStamp   = "eventtimestamp"
-	EventName        = "eventname"
-	EventType        = "eventtype"
-	EventSource      = "eventsource"
-	EventValuesFull  = "eventvaluesfull"
-	EventValuesShort = "eventvaluesshort"
+	EventTimeStamp = "eventtimestamp"
+	EventType      = "eventtype"
+	EventSource    = "eventsource"
+	EventValues    = "eventvalues"
 )
 
 type StoredEventValues map[string]interface{}
@@ -26,10 +24,18 @@ var (
 )
 
 func (event StoredEvent) ToCsv() (out string) {
-	return fmt.Sprintf("%s,%s,%s,%s,%s,%s", event[EventTimeStamp],
-		event[EventName],
+	shortValue, ok := event[EventValues].(StoredEvent)
+	valuesString := ""
+	if ok {
+		for key, value := range shortValue {
+			valuesString += fmt.Sprintf(",%s,%s", key, value)
+		}
+	} else {
+		valuesString = fmt.Sprintf("%v", event[EventValues])
+	}
+	return fmt.Sprintf("%s,%s,%s%s",
+		event[EventTimeStamp],
 		event[EventType],
 		event[EventSource],
-		event[EventValuesFull],
-		event[EventValuesShort])
+		valuesString)
 }

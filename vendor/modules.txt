@@ -128,7 +128,7 @@ github.com/pmezard/go-difflib/difflib
 # github.com/redhat-cne/channel-pubsub v0.0.5
 ## explicit; go 1.19
 github.com/redhat-cne/channel-pubsub
-# github.com/redhat-cne/ptp-listener-exports v0.0.5
+# github.com/redhat-cne/ptp-listener-exports v0.0.6
 ## explicit; go 1.19
 github.com/redhat-cne/ptp-listener-exports
 # github.com/redhat-cne/sdk-go v0.1.1-0.20221202175356-6d25e1b3c0be
