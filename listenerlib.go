@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	SubscriptionPath  = "/api/cloudNotifications/v1/subscriptions"
+	SubscriptionPath  = "/api/ocloudNotifications/v1/subscriptions"
 	LocalEventPath    = "/event"
 	LocalHealthPath   = "/health"
 	LocalAckEventPath = "/ack/event"
