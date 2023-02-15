@@ -29,7 +29,8 @@ import (
 )
 
 const (
-	SubscriptionPath  = "/api/cloudNotifications/v1/subscriptions"
+	SubscriptionPath  = "/api/ocloudNotifications/v1/subscriptions"
+	EventsPath        = "/api/ocloudNotifications/v1"
 	LocalEventPath    = "/event"
 	LocalHealthPath   = "/health"
 	LocalAckEventPath = "/ack/event"
@@ -43,6 +44,19 @@ var (
 	CurrentSubscriptionIDPerType = map[string]string{}
 	localListeningEndpoint       string
 )
+
+type ListenerConfig struct {
+	ptpEventServiceLocalhostPort,
+	ptpEventServiceRemotePort,
+	localHTTPServerPort int
+	ptpPodName,
+	nodeName,
+	ptpNs,
+	kubeconfigPath,
+	kubernetesHost string
+}
+
+var config ListenerConfig
 
 func InitPubSub() {
 	Ps = chanpubsub.NewPubsub()
@@ -64,7 +78,7 @@ var HTTPClient = &http.Client{
 
 // Consumer webserver
 func server(localListeningEndpoint string) {
-	http.HandleFunc(LocalEventPath, getEvent)
+	http.HandleFunc(LocalEventPath, processEvent)
 	http.HandleFunc(LocalHealthPath, health)
 	http.HandleFunc(LocalAckEventPath, ackEvent)
 	server := &http.Server{
@@ -91,7 +105,7 @@ func health(w http.ResponseWriter, req *http.Request) {
 // "Ce-Specversion": ["0.3"], "Ce-Time": ["2022-12-16T14:26:47.167232673Z"],
 // "Ce-Type": ["event.sync.ptp-status.ptp-clock-class-change"], ]
 
-func getEvent(w http.ResponseWriter, req *http.Request) {
+func processEvent(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 	bodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -271,6 +285,16 @@ func StartListening(ptpEventServiceLocalhostPort,
 	kubeconfigPath,
 	kubernetesHost string,
 ) (err error) {
+	// Saving configuration
+	config.ptpEventServiceLocalhostPort = ptpEventServiceLocalhostPort
+	config.ptpEventServiceRemotePort = ptpEventServiceRemotePort
+	config.localHTTPServerPort = localHTTPServerPort
+	config.ptpPodName = ptpPodName
+	config.nodeName = nodeName
+	config.ptpNs = ptpNs
+	config.kubeconfigPath = kubeconfigPath
+	config.kubernetesHost = kubernetesHost
+
 	logrus.Infof("Forwarding to pod: %s node: %s", ptpPodName, nodeName)
 	var ret *forwarder.Result
 	defer closeForwarder(ret)
@@ -329,11 +353,22 @@ func retry(attempts int, sleep time.Duration, f func() error) (err error) {
 	return fmt.Errorf("after %d attempts, last error: %s", attempts, err)
 }
 
+func IsEventValid(aEvent *event.Event) bool {
+	if aEvent.Time == nil || aEvent.Data == nil {
+		return false
+	}
+	return true
+}
+
 func createStoredEvent(data []byte) (aStoredEvent exports.StoredEvent, aType string, err error) {
 	var e event.Event
 	err = json.Unmarshal(data, &e)
 	if err != nil {
 		return aStoredEvent, aType, err
+	}
+
+	if !IsEventValid(&e) {
+		return aStoredEvent, aType, fmt.Errorf("parsed invalid event event=%+v", e)
 	}
 	logrus.Debug(e)
 
@@ -350,4 +385,54 @@ func createStoredEvent(data []byte) (aStoredEvent exports.StoredEvent, aType str
 		values[dataType] = v.Value
 	}
 	return exports.StoredEvent{exports.EventTimeStamp: e.Time, exports.EventType: e.Type, exports.EventSource: e.Source, exports.EventValues: values}, e.Type, nil
+}
+
+func GetEvent(nodeName, apiAddr, resource string) (aEvent exports.StoredEvent, aType string, err error) {
+	path := EventsPath + resource + `/CurrentState`
+	subURL := &types.URI{URL: url.URL{Scheme: "http",
+		Host: apiAddr,
+		Path: path}}
+
+	logrus.Infof("GET request with url=%s", subURL.String())
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	logrus.Infof("trying to get URL=%s", subURL.String())
+	req, err := http.NewRequestWithContext(ctx, "GET", subURL.String(), http.NoBody)
+	if err != nil {
+		logrus.Error(err)
+		return aEvent, aType, fmt.Errorf("error building http request, err=%s", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := HTTPClient.Do(req)
+	if err != nil {
+		return aEvent, aType, fmt.Errorf("error sending http request, err=%s", err)
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return aEvent, aType, fmt.Errorf("error reading event %v", err)
+	}
+
+	logrus.Debugf("received event %s", string(bodyBytes))
+
+	aEvent, aType, err = createStoredEvent(bodyBytes)
+	if err != nil {
+		logrus.Errorf("could not create event %s", err)
+		return aEvent, aType, err
+	}
+	logrus.Info(aEvent)
+	return aEvent, aType, err
+}
+
+// sends a fake events to indicate the initial state at the time of registering events via channel-pubsub
+func PushInitialEvent(resource string) {
+	const getAPIWait = 30
+	time.Sleep(time.Second * getAPIWait)
+	localListeningEndpoint = fmt.Sprintf("%s:%d", "localhost", config.ptpEventServiceLocalhostPort)
+	initialState, aType, err := GetEvent(config.nodeName, localListeningEndpoint, fmt.Sprintf(resourcePrefix, config.nodeName, resource))
+	if err != nil {
+		logrus.Errorf("could not get and push event resource=%s, err=%s", resource, err)
+	}
+	Ps.Publish(aType, initialState)
 }
