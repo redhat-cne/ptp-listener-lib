@@ -165,16 +165,16 @@ func SubscribeAnWaitForAllEvents(kubernetesHost, nodeName, apiAddr string, local
 	return nil
 }
 
-func UnsubscribeAllEvents(kubernetesHost, nodeName string) {
+func UnsubscribeAllEvents(nodeName string) {
 	if localListeningEndpoint == "" {
 		logrus.Error("local endpoint not available, cannot unsubscribe events")
 		return
 	}
 	supportedResources := initResources(nodeName)
 	for _, resource := range supportedResources {
-		err := deleteSubscription(resource, kubernetesHost)
+		err := deleteSubscription(resource, config.kubernetesHost)
 		if err != nil {
-			logrus.Errorf("could not delete resource=%s at api addr=%s with endpoint=%s , err=%s", resource, kubernetesHost, localListeningEndpoint, err)
+			logrus.Errorf("could not delete resource=%s at api addr=%s with endpoint=%s , err=%s", resource, config.kubernetesHost, localListeningEndpoint, err)
 		}
 	}
 }
