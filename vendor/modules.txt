@@ -125,7 +125,7 @@ github.com/pkg/errors
 # github.com/pmezard/go-difflib v1.0.0
 ## explicit
 github.com/pmezard/go-difflib/difflib
-# github.com/redhat-cne/channel-pubsub v0.0.6
+# github.com/redhat-cne/channel-pubsub v0.0.7
 ## explicit; go 1.19
 github.com/redhat-cne/channel-pubsub
 # github.com/redhat-cne/ptp-listener-exports v0.0.7

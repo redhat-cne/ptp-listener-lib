@@ -1,7 +1,7 @@
 module github.com/redhat-cne/ptp-listener-lib
 
 go 1.19
- 
+
 require (
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/redhat-cne/sdk-go v0.1.1-0.20221202175356-6d25e1b3c0be
@@ -74,7 +74,7 @@ require (
 
 require (
 	github.com/anthhub/forwarder v1.1.0
-	github.com/redhat-cne/channel-pubsub v0.0.6
+	github.com/redhat-cne/channel-pubsub v0.0.7
 	github.com/redhat-cne/ptp-listener-exports v0.0.7
 
 )
